@@ -19,7 +19,8 @@ logger.propagate = False
 
 if not logger.handlers:
     try:
-        _handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
+        # mode="w" -> log direset setiap Anki dibuka (tidak menumpuk)
+        _handler = logging.FileHandler(LOG_FILE, mode="w", encoding="utf-8")
         _handler.setFormatter(
             logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
         )
