@@ -7,47 +7,26 @@ import threading
 from datetime import datetime, timedelta
 import sys, os
 import re
-import logging
 import warnings
 
 ADDON_DIR = os.path.dirname(__file__)
-LOG_FILE = os.path.join(ADDON_DIR, "anki_discord.log")
-
-logger = logging.getLogger("AnkiDiscordRPC")
-logger.setLevel(logging.DEBUG)
-logger.propagate = False
-
-if not logger.handlers:
-    try:
-        # mode="w" -> log direset setiap Anki dibuka (tidak menumpuk)
-        _handler = logging.FileHandler(LOG_FILE, mode="w", encoding="utf-8")
-        _handler.setFormatter(
-            logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
-        )
-        logger.addHandler(_handler)
-    except Exception:
-        logger.addHandler(logging.NullHandler())
-
-logger.info("=" * 60)
-logger.info("AnkiDiscord addon loading")
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "pypresence"))
 
 try:
     from .pypresence import Presence
     PYPRESENCE_AVAILABLE = True
-    logger.info("pypresence imported successfully")
 except ImportError:
     PYPRESENCE_AVAILABLE = False
-    logger.error("pypresence not available. Install it with: pip install pypresence")
 
+# Modern Anki exposes per-card reviewer hooks via gui_hooks. The legacy
+# addHook("showAnswer", ...) is deprecated and does NOT fire on recent versions,
+# which is why per-card updates were missing.
 try:
     from aqt import gui_hooks
     GUI_HOOKS_AVAILABLE = True
-    logger.info("gui_hooks available")
 except Exception:
     GUI_HOOKS_AVAILABLE = False
-    logger.warning("gui_hooks not available; falling back to legacy hooks")
 
 # Rich presence configuration
 CLIENT_ID = '583084701510533126'
@@ -74,7 +53,6 @@ def _clean_text(text):
             text = text.replace(entity, char)
         text = re.sub(r"\s+", " ", text).strip()
     except Exception:
-        logger.exception("Failed to clean card text")
         return ""
     return text
 
@@ -119,13 +97,12 @@ class DiscordRichPresence:
             if self.retry_timer is not None:
                 self.retry_timer.cancel()
         except Exception:
-            logger.exception("Failed to cancel previous retry timer")
+            pass
 
         timer = threading.Timer(delay, self._connect_with_retry)
         timer.daemon = True
         self.retry_timer = timer
         timer.start()
-        logger.debug("Scheduled reconnect retry in %ss", delay)
 
     def _connect_with_retry(self):
         """Attempt to connect to Discord with retry logic"""
@@ -133,11 +110,9 @@ class DiscordRichPresence:
 
         # Don't retry too frequently
         if current_time - self.last_connection_attempt < self.retry_delay:
-            logger.debug("Skipping connect: retry delay not elapsed")
             return False
 
         if self.connection_attempts >= self.max_connection_attempts:
-            logger.warning("Max connection attempts reached, giving up for now")
             return False
 
         self.last_connection_attempt = current_time
@@ -147,22 +122,17 @@ class DiscordRichPresence:
                 try:
                     self.rpc.close()
                 except Exception:
-                    logger.debug("Ignoring error while closing old rpc", exc_info=True)
+                    pass
 
             self.rpc = Presence(CLIENT_ID)
             self.rpc.connect()
             self.connected = True
             self.connection_attempts = 0
-            logger.info("Discord Rich Presence connected successfully")
             return True
 
-        except Exception as e:
+        except Exception:
             self.connected = False
             self.connection_attempts += 1
-            logger.error(
-                "Failed to connect to Discord (attempt %s): %s",
-                self.connection_attempts, e,
-            )
 
             # Schedule retry in background
             if self.connection_attempts < self.max_connection_attempts:
@@ -185,7 +155,6 @@ class DiscordRichPresence:
 
             return reviews_today
         except Exception:
-            logger.exception("Failed to calculate cards done today")
             return 0
 
     def _calculate_due_cards(self):
@@ -213,9 +182,8 @@ class DiscordRichPresence:
             else:
                 self.due_message = f"{due_count} cards left ({self.cards_done_today} done today)"
 
-        except Exception as e:
+        except Exception:
             self.due_message = "Error calculating cards"
-            logger.exception("Error calculating due cards: %s", e)
 
     def get_current_card_text(self):
         """Return the cleaned, truncated front text of the card being reviewed."""
@@ -236,7 +204,6 @@ class DiscordRichPresence:
             front = _truncate(front, DISCORD_FIELD_MAX - len(prefix))
             return prefix + front
         except Exception:
-            logger.exception("Failed to get current card text")
             return ""
 
     def update_presence(self, state, details, small_image="tick-dark", force_update=False):
@@ -261,7 +228,6 @@ class DiscordRichPresence:
         # Try to connect if not connected
         if not self.connected:
             if not self._connect_with_retry():
-                logger.debug("Skipping update: not connected to Discord")
                 return
 
         try:
@@ -276,15 +242,13 @@ class DiscordRichPresence:
             }
 
             self.rpc.update(**activity)
-            logger.debug("Presence updated: details=%r state=%r", details, state)
 
             # Update tracking variables
             self.current_state = state
             self.current_details = details
             self.last_update_time = current_time
 
-        except Exception as e:
-            logger.exception("Failed to update Discord presence: %s", e)
+        except Exception:
             self.connected = False
 
             # Try to reconnect in background
@@ -297,9 +261,8 @@ class DiscordRichPresence:
                 self.rpc.clear()
                 self.current_state = ""
                 self.current_details = ""
-                logger.info("Discord presence cleared")
             except Exception:
-                logger.exception("Failed to clear Discord presence")
+                pass
 
     def close(self):
         """Clean up Discord connection"""
@@ -308,26 +271,24 @@ class DiscordRichPresence:
                 self.retry_timer.cancel()
                 self.retry_timer = None
         except Exception:
-            logger.debug("Ignoring error cancelling retry timer on close", exc_info=True)
+            pass
 
         if self.rpc and self.connected:
             try:
                 self.rpc.clear()
             except Exception:
-                logger.debug("Ignoring error clearing presence on close", exc_info=True)
+                pass
             try:
                 self.rpc.close()
             except Exception:
-                logger.debug("Ignoring error closing rpc on close", exc_info=True)
+                pass
         self.connected = False
-        logger.info("Discord connection closed")
 
 
 # Global instance
 try:
     discord_rpc = DiscordRichPresence()
 except Exception:
-    logger.exception("Failed to create DiscordRichPresence instance")
     discord_rpc = None
 
 
@@ -339,8 +300,6 @@ def on_state_change(state, old_state):
         return
 
     try:
-        logger.debug("State change: %s -> %s", old_state, state)
-
         # Map states to Discord presence
         if state == "overview":
             # Overview = a deck is finished or selected. Previously this returned
@@ -377,8 +336,8 @@ def on_state_change(state, old_state):
                 "ellipsis-dark"
             )
 
-    except Exception as e:
-        logger.exception("Error in state change handler: %s", e)
+    except Exception:
+        pass
 
 
 def on_browse_opened(browser):
@@ -464,12 +423,9 @@ if PYPRESENCE_AVAILABLE and discord_rpc:
     if GUI_HOOKS_AVAILABLE:
         gui_hooks.reviewer_did_show_question.append(on_review_card)
         gui_hooks.reviewer_did_show_answer.append(on_review_card)
-        logger.info("Registered reviewer gui_hooks for per-card updates")
     else:
         addHook("showAnswer", on_answer_shown)
-        logger.info("Registered legacy showAnswer hook")
 
     # Ensure cleanup on exit
     import atexit
     atexit.register(cleanup_on_close)
-    logger.info("AnkiDiscord hooks registered")
