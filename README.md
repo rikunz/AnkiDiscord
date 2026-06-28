@@ -24,6 +24,7 @@ Alternatively you can directly install us inside anki using the add-on code: **1
  - Adding other trackers such as streak (in days), average daily reviews, total mature cards etc.
 
 ### Update Log
+ - 3.0: Support for Anki 2.1, added settings to configure how Anki is displayed on Discord
  - 2.0: Support for new version of Anki, switch to pypresence, fix of all bugs in 1.1
  - 1.1: Fixed error when discord is not running
  - 1.0: Base add-on

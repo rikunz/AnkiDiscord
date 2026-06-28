@@ -13,9 +13,6 @@ import warnings
 ADDON_DIR = os.path.dirname(__file__)
 LOG_FILE = os.path.join(ADDON_DIR, "anki_discord.log")
 
-# ---------------------------------------------------------------------------
-# Logging setup - everything is written to anki_discord.log in the addon folder
-# ---------------------------------------------------------------------------
 logger = logging.getLogger("AnkiDiscordRPC")
 logger.setLevel(logging.DEBUG)
 logger.propagate = False
@@ -28,8 +25,6 @@ if not logger.handlers:
         )
         logger.addHandler(_handler)
     except Exception:
-        # If we can't open the log file, fall back to a null handler so the
-        # addon never crashes Anki just because of logging.
         logger.addHandler(logging.NullHandler())
 
 logger.info("=" * 60)
@@ -44,6 +39,14 @@ try:
 except ImportError:
     PYPRESENCE_AVAILABLE = False
     logger.error("pypresence not available. Install it with: pip install pypresence")
+
+try:
+    from aqt import gui_hooks
+    GUI_HOOKS_AVAILABLE = True
+    logger.info("gui_hooks available")
+except Exception:
+    GUI_HOOKS_AVAILABLE = False
+    logger.warning("gui_hooks not available; falling back to legacy hooks")
 
 # Rich presence configuration
 CLIENT_ID = '583084701510533126'
@@ -405,24 +408,28 @@ def on_editor_opened(editor, note=None):
     discord_rpc.skip_edit = 0
 
 
-def on_answer_shown():
-    """Handle answer being shown - update card counts periodically"""
+def on_review_card(card=None):
+    """Fired for every card shown in the reviewer (modern gui_hook).
+
+    Runs on each question/answer, so it also covers moving to the next card
+    or switching decks while still inside review - the afterStateChange hook
+    does NOT fire in those cases.
+    """
     global discord_rpc
     if not discord_rpc:
         return
 
-    # Only update every few cards to avoid excessive API calls
-    if discord_rpc.skip_answer >= 3:
-        details = discord_rpc.get_current_card_text() or "Daily reviews"
-        discord_rpc.update_presence(
-            discord_rpc.due_message,
-            details,
-            "tick-dark",
-            force_update=True  # Force update to refresh card counts
-        )
-        discord_rpc.skip_answer = 0
-    else:
-        discord_rpc.skip_answer += 1
+    details = discord_rpc.get_current_card_text() or "Daily reviews"
+    discord_rpc.update_presence(
+        discord_rpc.due_message,
+        details,
+        "tick-dark"
+    )
+
+
+def on_answer_shown():
+    """Legacy fallback for old Anki versions without gui_hooks."""
+    on_review_card()
 
 
 def on_collection_loaded():
@@ -448,9 +455,18 @@ if PYPRESENCE_AVAILABLE and discord_rpc:
     addHook("afterStateChange", on_state_change)
     addHook("browser.setupMenus", on_browse_opened)
     addHook("setupEditorShortcuts", on_editor_opened)
-    addHook("showAnswer", on_answer_shown)
     addHook("profileLoaded", on_collection_loaded)
     addHook("unloadProfile", cleanup_on_close)
+
+    # Per-card updates while reviewing. Prefer modern gui_hooks (fires on every
+    # card); fall back to the legacy showAnswer hook on very old Anki versions.
+    if GUI_HOOKS_AVAILABLE:
+        gui_hooks.reviewer_did_show_question.append(on_review_card)
+        gui_hooks.reviewer_did_show_answer.append(on_review_card)
+        logger.info("Registered reviewer gui_hooks for per-card updates")
+    else:
+        addHook("showAnswer", on_answer_shown)
+        logger.info("Registered legacy showAnswer hook")
 
     # Ensure cleanup on exit
     import atexit

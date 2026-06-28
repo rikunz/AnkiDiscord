@@ -1,0 +1,82 @@
+name: Release Addon
+
+run-name: Release Addon
+
+on:
+  push:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: write
+
+env:
+  AUTHOR_NAME: Thoriq Firdaus Arifin
+  GITHUB_USER: rikunz
+
+jobs:
+  release-addon:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Compute version (date based)
+        id: meta
+        run: |
+          DATE=$(date +'%Y.%m.%d')
+          echo "version=${DATE}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${DATE}.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          echo "file=${DATE}-${AUTHOR_NAME}-${GITHUB_USER}.ankiaddon" >> "$GITHUB_OUTPUT"
+
+      - name: Build .ankiaddon
+        env:
+          OUT: ${{ steps.meta.outputs.file }}
+        run: |
+          python - <<'PY'
+          import os, zipfile
+
+          out = os.environ["OUT"]
+
+          include_files = ["manifest.json", "__init__.py", "preview.png", "README.md"]
+          include_dirs = ["pypresence"]
+          skip_dirs = {"__pycache__"}
+
+          with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+              for name in include_files:
+                  if os.path.exists(name):
+                      z.write(name, name)
+                      print("added:", name)
+              for d in include_dirs:
+                  if not os.path.isdir(d):
+                      continue
+                  for root, dirs, files in os.walk(d):
+                      dirs[:] = [x for x in dirs if x not in skip_dirs]
+                      for f in files:
+                          if f.endswith(".pyc"):
+                              continue
+                          full = os.path.join(root, f)
+                          arc = full.replace(os.sep, "/")  # forward slash di dalam zip
+                          z.write(full, arc)
+                          print("added:", arc)
+
+          with zipfile.ZipFile(out) as z:
+              names = z.namelist()
+              assert "manifest.json" in names, "manifest.json tidak di root!"
+              assert "__init__.py" in names, "__init__.py tidak di root!"
+          print("BUILT:", out)
+          PY
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.version }}
+          files: ${{ steps.meta.outputs.file }}
+          generate_release_notes: true
